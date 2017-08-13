@@ -1,0 +1,223 @@
+define(['util','contextMenu','ztree'],function(util){
+	var tabletree = {
+			connections:{},
+			connectionNames:[],
+			connectionInfos:{},
+			ztree:null,
+			$ztree:$('#conntabletree'),
+			config:{
+				view : {
+					dblClickExpand : false,
+					showLine : true,
+					selectedMulti : true,
+					nameIsHTML:true  //name 节点支持 html
+				},
+				data : {
+					simpleData : {
+						enable : true,
+						idKey : 'id',
+						pIdKey : 'parentId',
+						rootPId : -1
+					},
+					key:{
+						name:'name'
+					}
+				},
+				callback : {
+					beforeClick :undefined ,
+					onClick :undefined,
+					onRightClick : undefined
+				}
+			}
+	};
+	
+	/**
+	 * 重新布局
+	 */
+	tabletree.relayout = function(){
+		
+	}
+	
+	/**
+	 * 过滤表,库,连接信息
+	 * scope 可指定在[conn,table,database] 中查找
+	 */
+	tabletree.filter = function(keyword,scope){
+		//目前加载所有的 connections
+		renderZtree(tabletree.connections);
+	}
+	
+	/**
+	 * 初始化连接信息树
+	 */
+	tabletree.init = function(){
+		//请求所有的连接,第一个连接的所有库,默认库的所有表,并保存起来
+		util.requestData('/sqlclient/connections',function(connections){
+			for(var i=0;i<connections.length;i++){
+				var connName = connections[i];
+				tabletree.connections[connName] = {};
+				tabletree.connectionNames.push(connName);
+//				if(i == 0){
+//					//在加载完成第一个连接的所有信息后,过滤空来渲染 ztree
+//					loadInfo(connName,function(){
+//						tabletree.filter();
+//						bindEvents();
+//					});
+//				}
+			}
+			loadInfo('default', function(){
+				tabletree.filter();
+				bindEvents();
+			});
+		});
+	}
+	
+	/**
+	 * 页面事件注册
+	 */
+	function bindEvents(){
+		/**
+		 * 树结点双击事件
+		 */
+		tabletree.config.callback.onDblClick = function(event,treeId,treeNode){
+			if(node != null && (!node.children || node.children.length == 0 )){
+				//这里需要判断是否存在子节点,如果有子节点可以直接展开,否则需要去后台查询信息
+				var nodeType = treeNode.nodeType;
+				switch(nodeType){
+				case 'conn':
+					loadInfo(treeNode.name);
+					break;
+				case 'db':
+					break;
+				}
+			}else{
+				tabletree.ztree.expandNode(treeNode);
+			}
+		}
+	}
+	
+	/**
+	 * 渲染 ztree
+	 */
+	function renderZtree(currConnections){
+		if(currConnections){
+			var treeNodes = [];
+			for(var connName in currConnections){
+				var conn = currConnections[connName];
+				treeNodes.push({name:connName,id:connName+'_conn',pid:'-1',nodeType:'conn'});
+				var connInfo = tabletree.connectionInfos[connName];
+				if(!connInfo){
+					//没有连接信息处理下一个连接
+					continue;
+				}
+				if(connInfo.dbType == 'mysql'){
+					for(var dbname in conn){
+						treeNodes.push({id:dbname+'_db',name:dbname,parentId:connName+'_conn',nodeType:'db'});
+						if(conn[dbname] && Object.keys(conn[dbname]).length > 0){
+							//渲染可用的表
+							addZtreeTables(conn[dbname],treeNodes,dbname+'_db');
+						}
+					}
+				}else{
+					addZtreeTables(conn,treeNodes,connName+'_conn');
+				}
+			}
+			tabletree.ztree = $.fn.zTree.init(tabletree.$ztree, tabletree.config, treeNodes);
+		}
+		
+		/**
+		 * 加入表信息
+		 */
+		function addZtreeTables(tables,treeNodes,parentId){
+			//树结点渲染
+			var tableCount = 0;
+      for ( var tableKey in tables) {
+        var table = tables[tableKey],columns = table.columns, 
+          //add by sanri at 2016/12/8 解决因表名过滤引发的 id 带有 em 标记 ,过滤时增加一个属性 realName
+            tableId = table.realName || table.tableName, tableName = formatTableName(tableCount,table);
+        treeNodes.push({id : tableId,name : tableName,parentId : parentId});
+        //加入列
+        if (columns && columns.length > 0) {
+          for ( var j = 0; j < columns.length; j++) {
+            var column = columns[j], columnId = column.realName || column.columnName, 
+                columnName = formatColumnName(j, column);
+            treeNodes.push({id : columnId,name : columnName,parentId : tableId});
+          }
+        }
+        tableCount ++;
+      }
+		}
+		
+		 /*
+     * 格式化 表名和字段名
+     */
+    function formatTableName(index,table){
+      var columns = table.columns || [];
+      return (index + 1)+'.'+table.tableName+'('+(table.comments || '未说明')+')['+columns.length+']';
+    }
+    function formatColumnName(index,column){
+      return (index + 1) + '.'+column.columnName+'('+(column.comments || '未说明')+')';
+    }
+	}
+	
+	/**
+	 * 加载连接的所有元数据
+	 */
+	function loadInfo(connName,callback){
+		//加载第一个连接的所有信息
+		util.requestData('/sqlclient/connectionInfo',{name:connName},function(connectionInfo){
+			tabletree.connectionInfos[connName] = connectionInfo;
+			//区分 mysql/oracle 加载表数据
+			if(connectionInfo){
+				if(connectionInfo.dbType == 'mysql'){
+					//加载数据库信息
+					util.requestData('/sqlclient/databases',{name:connName},function(databases){
+//						tabletree.connections[connName]['databases'] = [];
+						if(databases && databases.length>0){
+							for(var j=0;j<databases.length;j++){
+//								tabletree.connections[connName]['databases'].push(databases[j].dbname);
+								tabletree.connections[connName][databases[j].dbname] = {};
+							}
+							//找到连接默认的数据库,否则取第一个
+							var loadDb = connectionInfo.schema || databases[0].dbname ;
+							loadTables(loadDb,connName,true,callback);
+//							console.log(tabletree.connections);
+						}
+					});
+				}else{
+					//加载表信息
+					loadTables(connName,connName,false,callback);
+				}
+			}else{
+				layer.msg('找不到连接信息:'+connName);
+			}
+		});
+	}
+	
+	/**
+	 * 加载所有表信息
+	 */
+	function loadTables(key,connName,isMysql,callback){
+		util.requestData('/sqlclient/tables',{name:key},function(tables){
+			if(tables){
+				if(isMysql){
+//					tabletree.connections[connName][key]['tables'] = [];
+					for(var i=0;i<tables.length;i++){
+//						tabletree.connections[connName][key]['tables'].push(tables[i].tableName);
+						tabletree.connections[connName][key][tables[i].tableName] = tables[i];
+					}
+				}else{
+//					tabletree.connections[connName]['tables'] = [];
+					for(var i=0;i<tables.length;i++){
+//						tabletree.connections[connName]['tables'].push(tables[i].tableName);
+						tabletree.connections[connName][tables[i].tableName] = tables[i];
+					}
+				}
+				callback();
+			}
+		});
+	}
+	
+	
+	return tabletree;
+});
