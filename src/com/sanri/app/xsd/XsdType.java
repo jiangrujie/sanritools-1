@@ -13,7 +13,7 @@ public class XsdType {
 	private boolean global;		//是否全局类型
 	private boolean primitive;	//是否原始类型
 	private boolean enumtype;	//是否是枚举类型
-	private List<XsdType> values;	//枚举类型可能的值
+	private List<String> values;	//枚举类型可能的值
 	private String typeName;
 	private List<XsdParam> childParams;
 	
@@ -47,10 +47,10 @@ public class XsdType {
 	public void setEnumtype(boolean enumtype) {
 		this.enumtype = enumtype;
 	}
-	public List<XsdType> getValues() {
+	public List<String> getValues() {
 		return values;
 	}
-	public void setValues(List<XsdType> values) {
+	public void setValues(List<String> values) {
 		this.values = values;
 	}
 }
